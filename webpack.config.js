@@ -2,7 +2,6 @@ import path from 'path';
 import url from 'url';
 import userscript from './userscript.config.js';
 import WebpackUserscript from 'webpack-userscript';
-import { CleanWebpackPlugin } from 'clean-webpack-plugin';
 import _ from 'lodash';
 import * as WebpackDevServer from 'webpack-dev-server';
 
@@ -75,6 +74,5 @@ export default {
 			renameExt: true,
 			pretty: true,
 		}),
-		new CleanWebpackPlugin(),
 	],
 };
