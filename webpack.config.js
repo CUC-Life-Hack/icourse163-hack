@@ -20,6 +20,7 @@ const distHeader = {
 	downloadURL: `https://github.com/CUC-Life-Hack/${userscript.repoName}/raw/master/dist/main.user.js`,
 	include: userscript.include,
 	grant: ['unsafeWindow'],
+	'run-at': 'document-start',
 };
 if(dev)
 	distHeader.name += ' (dev)';
