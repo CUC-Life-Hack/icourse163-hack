@@ -13,6 +13,14 @@ class AjaxWithCsrf extends Ajax {
 }
 
 class Hack extends HackBase {
+	windowUrl: URL;
+	hashUrl: URL;
+	content = {
+		sectionId: "",
+		contentId: "",
+	};
+	#speedrunning: boolean = false;
+
 	AddEventListenerIsHijacked(): boolean {
 		return !HTMLElement.prototype.addEventListener.toString().includes('native code');
 	}
@@ -33,7 +41,7 @@ class Hack extends HackBase {
 					return false;
 				body.appendChild(iframe);
 				return !!iframe.parentNode;
-			}, 10, 500);
+			}, 10, 2000);
 			// Wait for its document to load
 			await Utils.Until(() => !!iframe.contentDocument, 10, 500);
 			const fetched = iframe.contentDocument?.addEventListener;
@@ -57,29 +65,81 @@ class Hack extends HackBase {
 		return true;
 	}
 
-	hashUrl: URL;
-	content = {
-		sectionId: "",
-		contentId: "",
-	};
-
+	IsViewingCatalogue(): boolean {
+		if(this.hashUrl.pathname !== '/learn/content')
+			return false;
+		if(this.hashUrl.search.length > 0)
+			return false;
+		return true;
+	}
 	IsViewingContent(): boolean {
-		if(
-			this.hashUrl.pathname !== '/learn/content' ||
-			this.hashUrl.searchParams.get('type') !== 'detail'
-		)
+		if(this.hashUrl.pathname !== '/learn/content')
+			return false;
+		if(this.hashUrl.searchParams.get('type') !== 'detail')
 			return false;
 		if(!this.hashUrl.searchParams.has('id'))
 			return false;
 		return true;
 	}
-	UpdateContentInformationFromHref() {
+	IsViewingCourse(): boolean {
+		const path = this.windowUrl.pathname.slice(1).split('/');
+		if(path.length !== 2)
+			return false;
+		if(path[0] !== 'learn')
+			return false;
+		if(!this.windowUrl.searchParams.has('tid'))
+			return false;
+		return true;
+	}
+	UpdateContentInformationFromHref(): void {
 		this.content.sectionId = this.hashUrl.searchParams.get('id');
 		if(this.hashUrl.searchParams.has('cid'))
 			this.content.contentId = this.hashUrl.searchParams.get('cid');
 	}
 
-	async FinishPagedContent() {
+	async NavigateTo(url: URL | string): Promise<void> {
+		window.location.href = url.toString();
+		await Utils.Delay(1500);
+	}
+	NavigateToCatalogue(): Promise<void> {
+		const url = new URL(this.windowUrl);
+		url.hash = '/learn/content';
+		return this.NavigateTo(url);
+	}
+	async NavigateToFirstUndoneLesson(): Promise<boolean> {
+		if(!this.IsViewingCatalogue())
+			await this.NavigateToCatalogue();
+		const $chapterList = Array.from((await new Promise<HTMLElement>(async res => {
+			let $: HTMLElement = null;
+			await Utils.Until(() => {
+				$ = window.document.querySelector('.m-learnChapterList');
+				return $ !== null;
+			}, 2000);
+			res($);
+		})).querySelectorAll('.m-learnChapterNormal')) as HTMLElement[];
+		console.log($chapterList);
+		console.group();
+		const $firstUndoneLesson = await new Promise<HTMLElement>(async res => {
+			for(const $chapter of $chapterList) {
+				// $chapter.click();
+				await Utils.Delay(1500);
+				const $candidate = $chapter.querySelector('.lsicon:not(.learned)');
+				console.log($candidate);
+				if(!$candidate)
+					continue;
+				res($candidate as HTMLElement);
+			}
+			res(null);
+		});
+		console.groupEnd();
+		console.warn($firstUndoneLesson);
+		if($firstUndoneLesson === null)
+			return false;
+		$firstUndoneLesson.click();
+		await Utils.Delay(1500);
+	}
+
+	async FinishPagedContent(): Promise<void> {
 		this.panel.Log('正在完成分页课件');
 		const pathname = '/web/j/courseRpcBean.saveMocContentLearn.rpc';
 		const payload = {
@@ -103,6 +163,68 @@ class Hack extends HackBase {
 		}
 		this.panel.Log('完成成功');
 	}
+	async FinishContent(): Promise<void> {}
+
+	get speedrunning(): boolean {
+		return this.#speedrunning;
+	}
+	set speedrunning(value: boolean) {
+		if(this.#speedrunning === value)
+			return;
+		switch(this.#speedrunning = value) {
+			case true:
+				this.TransitTo('Speedrunning');
+				break;
+			case false:
+				this.TriggerAutoTransit();
+				break;
+		}
+	}
+	async ContinueSpeedrunning(): Promise<unknown> {
+		if(!this.speedrunning)
+			return;
+		this.panel.Log('继续速通');
+		/*
+			可能有三种情况：
+			(a) 在内容（课程）页，依次刷完后返回目录；
+			(b) 在目录页，进入最前面的未完成内容或终止；
+			(c) 在其他页，进入目录页。
+		*/
+		try {
+			switch(true) {
+				case this.IsViewingContent():
+					this.panel.Log('进入内容页', 'warning');
+					this.speedrunning = false;
+					break;
+				case this.IsViewingCatalogue():
+					this.panel.Log('到达世界最高城，理塘！', 'warning');
+					try {
+						if(!await this.NavigateToFirstUndoneLesson()) {
+							this.panel.Log(`全部课程已刷完，速通完毕`);
+							this.speedrunning = false;
+							break;
+						}
+					}
+					catch(e) {
+						this.panel.Log(`前往课程页时发生错误：${e}`, 'warning');
+					}
+					break;
+				case this.IsViewingCourse():
+					this.panel.Log('正在前往目录页');
+					await this.NavigateToCatalogue();
+					break;
+				default:
+					this.panel.Log('来到了未知页面，速通终止', 'warning');
+					this.speedrunning = false;
+					break;
+			}
+		}
+		catch(e) {
+			this.panel.Log(e + '', 'warning');
+			this.speedrunning = false;
+		}
+		await Utils.Delay(100);
+	}
 
 	constructor() {
 		super();
@@ -113,9 +235,26 @@ class Hack extends HackBase {
 		});
 
 		Object.entries({
+			'Speedrunning': {
+				validate(this: Hack) {
+					return this.speedrunning;
+				},
+				async load(this: Hack) {
+					this.panel.Button('停止速通', () => this.speedrunning = false);
+
+					while(this.speedrunning) {
+						await this.ContinueSpeedrunning();
+					}
+				},
+				unload(this: Hack) {
+					this.panel.Clear();
+				}
+			},
 			'Viewing actual content': {
-				validate: () => this.IsViewingContent(),
-				async load() {
+				validate(this: Hack) {
+					return this.IsViewingContent();
+				},
+				async load(this: Hack) {
 					this.panel.Clear();
 
 					this.UpdateContentInformationFromHref();
@@ -141,22 +280,33 @@ class Hack extends HackBase {
 					this.panel.Header('数据层操作');
 					this.panel.Button('完成分页课件', this.FinishPagedContent);
 				},
-				unload() {
+				unload(this: Hack) {
 					this.panel.Clear();
 					this.content.sectionId = "";
 					this.content.contentId = "";
 				},
-			}
+			},
+			'Idle': {
+				validate(this: Hack) {
+					return this.IsViewingCourse();
+				},
+				load(this: Hack) {
+					this.panel.Button('开始速通', () => this.speedrunning = true);
+				},
+				unload(this: Hack) {
+					this.panel.Clear();
+				},
+			},
 		}).forEach(([name, state]) => this.states.set(name, state));
 
-		this.life.on('urlchange', function() {
-			const currentUrl = new URL(window.location.href);
-			this.hashUrl = new URL(`http://domain${currentUrl.hash.slice(1)}`);
+		this.life.on('urlchange', () => {
+			this.windowUrl = new URL(window.location.href);
+			this.hashUrl = new URL(`http://domain${this.windowUrl.hash.slice(1)}`);
 			try {
 				this.TriggerAutoTransit();
 			}
 			catch(e) {
-				this.panel.Log(e.toString(), 'warning');
+				this.panel.Log(e + '', 'warning');
 			}
 		});
 	}
